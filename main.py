@@ -37,5 +37,19 @@ def main(page: ft.Page):
 
 if __name__ == "__main__":
     import os
-    os.environ["FLET_SECRET_KEY"] = "my_super_secret_key"
-    ft.app(target=main, view=ft.AppView.WEB_BROWSER, host="192.168.1.137", port=8000, upload_dir="uploads")
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+    secret_key = os.environ.get("FLET_SECRET_KEY", "chave_secreta_padrao_mudar_em_producao")
+
+    os.environ["FLET_SECRET_KEY"] = secret_key
+
+    ft.app(
+        target=main,
+        view=ft.AppView.WEB_BROWSER,
+        host=host,
+        port=port,
+        upload_dir="uploads"
+    )
