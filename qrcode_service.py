@@ -116,62 +116,129 @@ def fetch_nfe_page(url: str) -> str | None:
         return None
 
 
+def _to_float(txt: str) -> float:
+    """Converte string monetária brasileira para float. Ex: '1.234,56' → 1234.56"""
+    txt = txt.strip().replace("R$", "").replace(" ", "")
+    # Remove pontos de milhar e troca vírgula por ponto decimal
+    txt = re.sub(r"\.", "", txt)   # remove pontos
+    txt = txt.replace(",", ".")     # troca vírgula por ponto
+    try:
+        return float(txt)
+    except ValueError:
+        return 0.0
+
+
 def parse_nfe_items(html: str) -> list[dict]:
     """
-    Extrai itens da página HTML da NF-e.
-    Compatível com o layout padrão NFC-e (usado pela maioria dos estados).
+    Extrai itens + preços da página HTML da NF-e.
+    Tenta múltiplos layouts utilizados pelos estados brasileiros.
     """
     soup = BeautifulSoup(html, "lxml")
     itens = []
 
-    # ── Layout 1: tabela com classe 'table' (SP, MG, RS, PR, etc.) ──
-    tabela = soup.find("table", {"id": "Prod"})
-    if not tabela:
-        tabela = soup.find("table", class_=re.compile(r"table", re.I))
+    # ── DEBUG: salva o HTML para inspeção se não encontrar preços ──
+    print("[QR] Iniciando parse do HTML da NF-e...")
 
-    if tabela:
+    # ── Estratégia A: Layout NFC-e padrão (SP, MG, RS, PR, GO, etc.) ──
+    # Estrutura: <table id="tabResult"> ou tabelas com colunas bem definidas
+    # Cabeçalho típico: Código | Descrição | Qtd | Un | Vl Unit | Vl Total
+    tabelas = soup.find_all("table")
+    print(f"[QR] Tabelas encontradas: {len(tabelas)}")
+
+    for tabela in tabelas:
         linhas = tabela.find_all("tr")
-        for linha in linhas[1:]:  # pular cabeçalho
+        if len(linhas) < 2:
+            continue
+
+        # Detecta colunas pelo cabeçalho
+        header = linhas[0]
+        header_texts = [th.get_text(strip=True).lower() for th in header.find_all(["th", "td"])]
+        print(f"[QR] Cabeçalho tabela: {header_texts}")
+
+        # Identifica índices das colunas por nome
+        idx_nome = idx_preco = -1
+        for i, h in enumerate(header_texts):
+            if any(k in h for k in ["descrição", "descricao", "produto", "item", "nome"]):
+                idx_nome = i
+            if any(k in h for k in ["vl total", "valor total", "vltotal", "total", "vl. total"]):
+                idx_preco = i
+
+        # Se não encontrou pelo cabeçalho, usa posição padrão (coluna 1 = nome, última = total)
+        if idx_nome == -1:
+            idx_nome = 1
+        if idx_preco == -1:
+            idx_preco = -1  # última coluna
+
+        print(f"[QR] idx_nome={idx_nome}, idx_preco={idx_preco}")
+
+        temp_itens = []
+        for linha in linhas[1:]:
             cols = linha.find_all("td")
-            if len(cols) >= 3:
-                nome = cols[1].get_text(strip=True) if len(cols) > 1 else ""
-                # Tenta encontrar a coluna de valor unitário ou vlr total
-                preco_str = ""
-                for col in reversed(cols):
-                    txt = col.get_text(strip=True).replace(".", "").replace(",", ".")
-                    if re.match(r"^\d+\.\d{2}$", txt):
-                        preco_str = txt
+            if len(cols) < 2:
+                continue
+
+            nome = cols[idx_nome].get_text(strip=True) if idx_nome < len(cols) else ""
+            if not nome or len(nome) < 2:
+                continue
+
+            # Tenta extrair o preço da coluna identificada ou procura na linha toda
+            preco = 0.0
+            cols_para_testar = (
+                [cols[idx_preco]] if idx_preco != -1 and idx_preco < len(cols)
+                else list(reversed(cols))
+            )
+
+            for col in cols_para_testar:
+                raw = col.get_text(strip=True)
+                # Considera valores no formato: 9,99 / 99,99 / 1.999,99
+                if re.search(r"\d+[.,]\d{2}", raw):
+                    val = _to_float(raw)
+                    if val > 0:
+                        preco = val
                         break
-                if nome:
-                    try:
-                        preco = float(preco_str) if preco_str else 0.0
-                    except ValueError:
-                        preco = 0.0
-                    itens.append({
-                        "nome": nome[:80],
-                        "preco": preco,
-                        "categoria": guess_categoria(nome),
-                        "comprado": False
-                    })
-        if itens:
-            return itens
 
-    # ── Layout 2: divs com classe 'item' (alguns estados alternativos) ──
-    divs_item = soup.find_all("span", class_=re.compile(r"Nome|txtTit|item", re.I))
-    precos_div = soup.find_all("span", class_=re.compile(r"Vl|vlrItem|vTotLiq", re.I))
+            print(f"[QR] Item: '{nome}' | Preço: {preco} | Raw cols: {[c.get_text(strip=True)[:15] for c in cols]}")
+            temp_itens.append({
+                "nome": nome[:80],
+                "preco": preco,
+                "categoria": guess_categoria(nome),
+                "comprado": False
+            })
 
-    for i, div_nome in enumerate(divs_item):
-        nome = div_nome.get_text(strip=True)
+        if temp_itens:
+            itens.extend(temp_itens)
+            break  # Usa a primeira tabela que retornar itens válidos
+
+    if itens:
+        return itens
+
+    # ── Estratégia B: Spans e divs (NFC-e de alguns estados como BA, CE) ──
+    # Nome em span.txtTit / txtNome, valor em span.valor / vlrItem
+    nomes_span = soup.find_all("span", class_=re.compile(r"txtTit|txtNome|Nome|item", re.I))
+    valores_span = soup.find_all("span", class_=re.compile(r"valor|vlrItem|vTotLiq|Vl|price", re.I))
+
+    print(f"[QR] Estratégia B: {len(nomes_span)} nomes, {len(valores_span)} valores")
+
+    for i, span_nome in enumerate(nomes_span):
+        nome = span_nome.get_text(strip=True)
         preco = 0.0
-        if i < len(precos_div):
-            try:
-                preco = float(
-                    precos_div[i].get_text(strip=True)
-                    .replace(".", "").replace(",", ".")
-                )
-            except ValueError:
-                pass
+
+        # Tenta pegar valor no mesmo container pai
+        pai = span_nome.find_parent()
+        if pai:
+            todos_textos = pai.find_all(string=re.compile(r"\d+[.,]\d{2}"))
+            for t in reversed(todos_textos):
+                val = _to_float(str(t))
+                if val > 0:
+                    preco = val
+                    break
+
+        # Fallback: usa lista de spans de valor na mesma posição
+        if preco == 0.0 and i < len(valores_span):
+            preco = _to_float(valores_span[i].get_text(strip=True))
+
         if nome:
+            print(f"[QR B] Item: '{nome}' | Preço: {preco}")
             itens.append({
                 "nome": nome[:80],
                 "preco": preco,
@@ -180,6 +247,7 @@ def parse_nfe_items(html: str) -> list[dict]:
             })
 
     return itens
+
 
 
 def get_items_from_nfe_qrcode(image_path: str) -> list[dict]:
