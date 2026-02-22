@@ -2,3 +2,8 @@ flet==0.25.2
 supabase
 python-dotenv
 groq
+pyzbar
+pillow
+requests
+beautifulsoup4
+lxml

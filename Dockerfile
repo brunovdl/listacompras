@@ -17,6 +17,11 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# libzbar0: necessário para o pyzbar decodificar QR Codes
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libzbar0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copiar dependências do build stage
 COPY --from=builder /install /usr/local
 
