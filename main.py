@@ -9,6 +9,7 @@ def main(page: ft.Page):
     page.title = "Lista de Compras"
     page.theme_mode = ft.ThemeMode.DARK
     page.bgcolor = BG_COLOR
+    page.favicon = "favicon.png"
     
     # Customizing fonts, we assume default unless specified
     page.fonts = {
@@ -51,5 +52,6 @@ if __name__ == "__main__":
         view=ft.AppView.WEB_BROWSER,
         host=host,
         port=port,
-        upload_dir="uploads"
+        upload_dir="uploads",
+        assets_dir="assets"
     )
