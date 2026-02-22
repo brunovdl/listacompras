@@ -7,3 +7,5 @@ pillow
 requests
 beautifulsoup4
 lxml
+opencv-python-headless
+numpy

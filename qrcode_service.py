@@ -1,7 +1,8 @@
 import re
 import requests
+import cv2
+import numpy as np
 from PIL import Image
-from pyzbar.pyzbar import decode as qr_decode
 from bs4 import BeautifulSoup
 
 HEADERS = {
@@ -42,21 +43,63 @@ def guess_categoria(nome: str) -> str:
     return "Mercado"
 
 
-def decode_qrcode(image_path: str) -> str | None:
-    """Decodifica o QR Code de uma imagem e retorna a URL encontrada."""
+def _decode_with_opencv(image_path: str) -> str | None:
+    """Decodifica QR Code usando OpenCV (sem DLL externas)."""
     try:
+        img = cv2.imread(image_path)
+        if img is None:
+            # Tenta via PIL → numpy (para imagens com paths especiais)
+            pil_img = Image.open(image_path).convert("RGB")
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+        detector = cv2.QRCodeDetector()
+        data, _, _ = detector.detectAndDecode(img)
+        if data and data.startswith("http"):
+            print(f"[QR/cv2] URL: {data}")
+            return data
+
+        # Tenta com preprocessing (melhora leitura de QRs difíceis)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        data, _, _ = detector.detectAndDecode(thresh)
+        if data and data.startswith("http"):
+            print(f"[QR/cv2+thresh] URL: {data}")
+            return data
+
+        return None
+    except Exception as e:
+        print(f"[QR/cv2] Erro: {e}")
+        return None
+
+
+def _decode_with_pyzbar(image_path: str) -> str | None:
+    """Fallback: decodifica via pyzbar (requer libzbar DLL no Windows)."""
+    try:
+        from pyzbar.pyzbar import decode as qr_decode
         img = Image.open(image_path)
         decoded = qr_decode(img)
         for obj in decoded:
             data = obj.data.decode("utf-8").strip()
             if data.startswith("http"):
-                print(f"[QR] URL encontrada: {data}")
+                print(f"[QR/pyzbar] URL: {data}")
                 return data
-        print("[QR] Nenhum QR Code com URL encontrado na imagem.")
         return None
     except Exception as e:
-        print(f"[QR] Erro ao decodificar QR Code: {e}")
+        print(f"[QR/pyzbar] Erro (ignorado): {e}")
         return None
+
+
+def decode_qrcode(image_path: str) -> str | None:
+    """Tenta OpenCV primeiro; fallback para pyzbar se disponível."""
+    url = _decode_with_opencv(image_path)
+    if url:
+        return url
+    url = _decode_with_pyzbar(image_path)
+    if url:
+        return url
+    print("[QR] Nenhum QR Code válido de NF-e encontrado.")
+    return None
+
 
 
 def fetch_nfe_page(url: str) -> str | None:
