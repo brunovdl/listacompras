@@ -250,12 +250,100 @@ def parse_nfe_items(html: str) -> list[dict]:
 
 
 
+def parse_nfe_items_with_groq(html: str) -> list[dict]:
+    """
+    Usa o Groq (modelo openai/gpt-oss-20b) para extrair itens do HTML da NF-e.
+    Retorna lista de dicts com nome, categoria, preco e comprado.
+    """
+    import os
+    import json
+    from groq import Groq
+
+    api_key = os.environ.get("GROQ_API_KEY", "")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY não configurada no .env")
+
+    # Extrai somente o texto visível da página, ignorando scripts/styles
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "head", "nav", "footer", "noscript"]):
+        tag.decompose()
+    texto_puro = soup.get_text(separator="\n", strip=True)
+
+    # Limita o texto a ~8000 chars para não estourar o contexto
+    texto_puro = texto_puro[:8000]
+
+    print(f"[QR/Groq] Texto extraído do SEFAZ ({len(texto_puro)} chars). Enviando ao Groq...")
+
+    prompt = (
+        "Você é um assistente especializado em notas fiscais brasileiras (NF-e/NFC-e). "
+        "Abaixo está o texto extraído de uma página de consulta de nota fiscal no portal SEFAZ. "
+        "Extraia APENAS os itens de produto que foram comprados (ignore totais, taxas, descontos, "
+        "informações do estabelecimento, dados do consumidor, forma de pagamento e rodapé). "
+        "Para cada produto retorne EXATAMENTE um JSON com as chaves:\n"
+        "  nome (string, nome do produto),\n"
+        "  categoria (escolha entre: Mercado, Hortifruti, Açougue, Frios, Limpeza, Padaria, Outros),\n"
+        "  preco (float, valor total do item — não unitário).\n\n"
+        "Retorne SOMENTE um JSON Array. Sem markdown, sem texto extra, sem chave raiz.\n\n"
+        f"TEXTO DA NOTA:\n{texto_puro}"
+    )
+
+    client = Groq(api_key=api_key)
+    resp = client.chat.completions.create(
+        messages=[{"role": "user", "content": prompt}],
+        model="openai/gpt-oss-20b",
+        temperature=0.1,
+    )
+
+    raw = resp.choices[0].message.content or ""
+    print(f"[QR/Groq] Resposta bruta: {raw[:300]}")
+
+    # Remove possível markdown
+    raw = raw.strip()
+    if raw.startswith("```json"):
+        raw = raw[7:]
+    if raw.startswith("```"):
+        raw = raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "itens" in data:
+            data = data["itens"]
+        if not isinstance(data, list):
+            raise ValueError("Resposta do Groq não é uma lista")
+    except Exception as e:
+        print(f"[QR/Groq] Erro ao parsear JSON: {e}")
+        return []
+
+    itens = []
+    for item in data:
+        nome = str(item.get("nome", "")).strip()
+        categoria = str(item.get("categoria", "Mercado")).strip()
+        try:
+            preco = float(item.get("preco", 0.0))
+        except (ValueError, TypeError):
+            preco = 0.0
+        if nome and len(nome) > 1:
+            itens.append({
+                "nome": nome[:80],
+                "preco": preco,
+                "categoria": categoria,
+                "comprado": False
+            })
+
+    print(f"[QR/Groq] {len(itens)} itens extraídos pela IA.")
+    return itens
+
+
 def get_items_from_nfe_qrcode(image_path: str) -> list[dict]:
     """
     Pipeline completo:
     1. Decodifica QR Code da imagem
     2. Busca página SEFAZ
-    3. Extrai e retorna lista de itens
+    3. Envia HTML ao Groq (openai/gpt-oss-20b) para extrair nome, categoria e preço
+    4. Retorna lista de itens para inserção no banco
     """
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -268,13 +356,24 @@ def get_items_from_nfe_qrcode(image_path: str) -> list[dict]:
     if not html:
         raise ValueError(f"Não foi possível acessar o portal SEFAZ.\nURL: {url}")
 
-    itens = parse_nfe_items(html)
+    # Tenta parser via Groq primeiro
+    try:
+        itens = parse_nfe_items_with_groq(html)
+    except Exception as e:
+        print(f"[QR] Groq falhou ({e}), tentando parser HTML clássico...")
+        itens = []
+
+    # Fallback para parser HTML se Groq falhar ou retornar vazio
+    if not itens:
+        print("[QR] Usando parser HTML como fallback...")
+        itens = parse_nfe_items(html)
+
     if not itens:
         raise ValueError(
             "QR Code lido com sucesso, mas não foi possível extrair itens.\n"
             f"URL: {url}\n"
-            "O estado pode ter um layout diferente."
+            "Verifique se a chave GROQ_API_KEY está configurada corretamente."
         )
 
-    print(f"[QR] {len(itens)} itens extraídos da NF-e.")
+    print(f"[QR] {len(itens)} itens prontos para inserção no banco.")
     return itens
