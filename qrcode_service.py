@@ -117,15 +117,28 @@ def fetch_nfe_page(url: str) -> str | None:
 
 
 def _to_float(txt: str) -> float:
-    """Converte string monetária brasileira para float. Ex: '1.234,56' → 1234.56"""
-    txt = txt.strip().replace("R$", "").replace(" ", "")
-    # Remove pontos de milhar e troca vírgula por ponto decimal
-    txt = re.sub(r"\.", "", txt)   # remove pontos
-    txt = txt.replace(",", ".")     # troca vírgula por ponto
-    try:
-        return float(txt)
-    except ValueError:
-        return 0.0
+    """
+    Extrai e converte o último valor monetário de uma string.
+    Suporta: 'Vl. Total3,19', '1.234,56', 'R$ 12,50', '3,19', '39.90'.
+    """
+    # Tenta extrair padrão com vírgula decimal (BRL): ex '3,19' ou '1.234,56'
+    matches = re.findall(r"\d{1,3}(?:\.\d{3})*,\d{2}", txt)
+    if matches:
+        raw = matches[-1].replace(".", "").replace(",", ".")
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+
+    # Tenta padrão com ponto decimal: ex '3.19' ou '39.90'
+    matches = re.findall(r"\d+\.\d{2}", txt)
+    if matches:
+        try:
+            return float(matches[-1])
+        except ValueError:
+            pass
+
+    return 0.0
 
 
 def parse_nfe_items(html: str) -> list[dict]:
@@ -163,9 +176,9 @@ def parse_nfe_items(html: str) -> list[dict]:
             if any(k in h for k in ["vl total", "valor total", "vltotal", "total", "vl. total"]):
                 idx_preco = i
 
-        # Se não encontrou pelo cabeçalho, usa posição padrão (coluna 1 = nome, última = total)
+        # Se não encontrou pelo cabeçalho, default: col 0 = nome, última = total
         if idx_nome == -1:
-            idx_nome = 1
+            idx_nome = 0
         if idx_preco == -1:
             idx_preco = -1  # última coluna
 
@@ -177,29 +190,37 @@ def parse_nfe_items(html: str) -> list[dict]:
             if len(cols) < 2:
                 continue
 
-            nome = cols[idx_nome].get_text(strip=True) if idx_nome < len(cols) else ""
+            # Quando só há 2 colunas: col[0]=bloco do produto, col[1]="Vl. TotalX,XX"
+            # Independente do que o cabeçalho indicou, forçamos idx=0
+            nome_idx = 0 if len(cols) == 2 else idx_nome
+
+            # col[0] pode conter: "AGUA MIN LEVITY 1,5L(Código:12345)Qtde.:1 UN:UN Vl. Unit.:3,19"
+            # Pegamos somente a primeira parte (nome real do produto)
+            bloco = cols[nome_idx].get_text(separator="\n", strip=True) if nome_idx < len(cols) else ""
+            # Corta no primeiro separador de info extra
+            for sep in ["(Código", "(Cod", "Código", "Qtde", "Vl. Unit", "\n", "\r"]:
+                if sep in bloco:
+                    bloco = bloco.split(sep)[0]
+            nome = bloco.strip()
+
             if not nome or len(nome) < 2:
                 continue
 
-            # Tenta extrair o preço da coluna identificada ou procura na linha toda
+            # Extrai preço de todas as colunas exceto a do nome (usando índice)
             preco = 0.0
-            cols_para_testar = (
-                [cols[idx_preco]] if idx_preco != -1 and idx_preco < len(cols)
-                else list(reversed(cols))
-            )
-
-            for col in cols_para_testar:
+            for i, col in enumerate(cols):
+                if i == nome_idx:
+                    continue
                 raw = col.get_text(strip=True)
-                # Considera valores no formato: 9,99 / 99,99 / 1.999,99
-                if re.search(r"\d+[.,]\d{2}", raw):
-                    val = _to_float(raw)
-                    if val > 0:
-                        preco = val
-                        break
+                print(f"[QR] col[{i}] raw = '{raw}'  → _to_float = {_to_float(raw)}")
+                val = _to_float(raw)
+                if val > 0:
+                    preco = val
+                    break
 
-            print(f"[QR] Item: '{nome}' | Preço: {preco} | Raw cols: {[c.get_text(strip=True)[:15] for c in cols]}")
+            print(f"[QR] ✅ '{nome}' → R$ {preco:.2f}")
             temp_itens.append({
-                "nome": nome[:80],
+                "nome": nome[:60],
                 "preco": preco,
                 "categoria": guess_categoria(nome),
                 "comprado": False

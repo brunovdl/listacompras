@@ -78,3 +78,30 @@ async def update_item(item_id: int, dados: dict):
     except Exception as e:
         print(f"Erro ao atualizar item: {e}")
         return False
+
+async def delete_itens_invalidos():
+    """Remove itens com nomes inválidos gerados por parser quebrado (ex: 'Vl. Total...')."""
+    if not supabase: return 0
+    try:
+        # Busca todos os itens
+        res = await asyncio.to_thread(
+            lambda: supabase.table("itens_lista").select("id, nome").execute()
+        )
+        itens = res.data or []
+        
+        PREFIXOS_INVALIDOS = ("vl. total", "vl.total", "total", "subtotal")
+        ids_invalidos = [
+            item["id"] for item in itens
+            if item.get("nome", "").lower().strip().startswith(PREFIXOS_INVALIDOS)
+        ]
+        
+        if ids_invalidos:
+            for item_id in ids_invalidos:
+                await asyncio.to_thread(
+                    lambda iid=item_id: supabase.table("itens_lista").delete().eq("id", iid).execute()
+                )
+            print(f"[DB] {len(ids_invalidos)} itens inválidos removidos.")
+        return len(ids_invalidos)
+    except Exception as e:
+        print(f"Erro ao limpar itens inválidos: {e}")
+        return 0

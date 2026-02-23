@@ -376,7 +376,7 @@ def get_lista_view(page: ft.Page):
         bgcolor=BG_COLOR,
         padding=0,
         floating_action_button=fab,
-        floating_action_button_location=ft.FloatingActionButtonLocation.END_CONTAINED,
+        floating_action_button_location=ft.FloatingActionButtonLocation.END_FLOAT,
     )
     view.controls.append(file_picker)
     view.controls.append(file_picker_qr)
@@ -584,15 +584,15 @@ def get_lista_view(page: ft.Page):
             padding=ft.padding.symmetric(horizontal=10, vertical=10)
         )
 
+    # Filtro de categoria ativo (None = todos)
+    filtro_categoria = [None]
+
     async def perform_load_data():
         itens = await get_itens_lista()
         list_content.controls.clear()
 
-        # Atualizar lista de todos os ids para "Selecionar Todos"
         todos_os_ids.clear()
         todos_os_ids.extend([i['id'] for i in itens if i.get('id')])
-
-        # Atualizar contador de seleção
         sel_count_text.value = f"{len(ids_selecionados)} selecionado(s)"
 
         if not itens:
@@ -601,51 +601,106 @@ def get_lista_view(page: ft.Page):
                 alignment=ft.alignment.center,
                 padding=40
             ))
-            
-            # update subtitle placeholder
             subtitle_text.value = "0 itens restantes - R$ 0,00 est."
             view.update()
             return
-            
-        itens_pendentes = [i for i in itens if not i.get('comprado', False)]
-        itens_comprados = [i for i in itens if i.get('comprado', False)]
-        
+
+        itens_pendentes = sorted(
+            [i for i in itens if not i.get('comprado', False)],
+            key=lambda x: x.get('nome', '').lower()
+        )
+        itens_comprados = sorted(
+            [i for i in itens if i.get('comprado', False)],
+            key=lambda x: x.get('nome', '').lower()
+        )
+
         total_est = sum([float(i.get('preco', 0)) for i in itens_pendentes])
-        
-        # Update subtitle
         subtitle_text.value = f"{len(itens_pendentes)} itens restantes • R$ {total_est:.2f} est."
 
         if itens_pendentes:
-            # Mock category grouping
-            cat_title = ft.Row([
-                ft.Text("PENDENTES", size=11, weight=ft.FontWeight.W_600, color=TEXT_SECONDARY),
-                ft.Text("Ordenar por Corredor", size=11, weight=ft.FontWeight.W_500, color=CYAN)
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-            
-            list_content.controls.append(cat_title)
-            
+            # Descobre as categorias existentes nos itens pendentes
+            cats_existentes = []
             for item in itens_pendentes:
-                list_content.controls.append(build_item_card(item))
-                
+                cat = item.get('categoria') or 'Outros'
+                if cat not in cats_existentes:
+                    cats_existentes.append(cat)
+
+            ORDEM_CATS = ["Hortifruti", "Mercado", "Padaria", "Frios", "Açougue", "Limpeza", "Outros"]
+            cats_existentes.sort(key=lambda c: ORDEM_CATS.index(c) if c in ORDEM_CATS else 99)
+
+            def make_chip(label, is_active):
+                def on_click_chip(e, lbl=label):
+                    if filtro_categoria[0] == lbl:
+                        filtro_categoria[0] = None   # desseleciona
+                    else:
+                        filtro_categoria[0] = lbl
+                    page.run_task(perform_load_data)
+
+                return ft.Container(
+                    content=ft.Text(
+                        label,
+                        size=11,
+                        weight=ft.FontWeight.W_600 if is_active else ft.FontWeight.W_400,
+                        color=BG_COLOR if is_active else TEXT_SECONDARY
+                    ),
+                    bgcolor=CYAN if is_active else CARD_COLOR,
+                    border_radius=20,
+                    padding=ft.padding.symmetric(horizontal=12, vertical=5),
+                    on_click=on_click_chip,
+                    border=ft.border.all(1, CYAN if is_active else TEXT_SECONDARY),
+                )
+
+            # Linha de chips de filtro
+            chips_row = ft.Row(
+                [make_chip(cat, filtro_categoria[0] == cat) for cat in cats_existentes],
+                scroll=ft.ScrollMode.HIDDEN,
+                spacing=6
+            )
+
+            list_content.controls.append(
+                ft.Row([
+                    ft.Text("PENDENTES", size=11, weight=ft.FontWeight.W_600, color=TEXT_SECONDARY),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+            )
+            list_content.controls.append(ft.Container(height=6))
+            list_content.controls.append(chips_row)
+            list_content.controls.append(ft.Container(height=8))
+
+            # Aplica o filtro
+            itens_exibidos = (
+                [i for i in itens_pendentes if (i.get('categoria') or 'Outros') == filtro_categoria[0]]
+                if filtro_categoria[0]
+                else itens_pendentes
+            )
+
+            if not itens_exibidos:
+                list_content.controls.append(ft.Container(
+                    content=ft.Text(
+                        f"Nenhum item em '{filtro_categoria[0]}'",
+                        color=TEXT_SECONDARY, text_align=ft.TextAlign.CENTER, size=13
+                    ),
+                    alignment=ft.alignment.center,
+                    padding=ft.padding.symmetric(vertical=20)
+                ))
+            else:
+                for item in itens_exibidos:
+                    list_content.controls.append(build_item_card(item))
+
         if itens_comprados:
             list_content.controls.append(ft.Container(height=10))
-            list_content.controls.append(ft.Divider(height=1, color=TEXT_SECONDARY)) 
+            list_content.controls.append(ft.Divider(height=1, color=TEXT_SECONDARY))
             list_content.controls.append(ft.Container(height=10))
-            
             list_content.controls.append(ft.Row([
                 ft.Text("COMPRADOS", size=11, weight=ft.FontWeight.W_600, color=TEXT_SECONDARY),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
-            
             for item in itens_comprados:
                 list_content.controls.append(build_item_card(item))
-            
-        # Add some bottom padding so FAB doesn't hide last item
-        list_content.controls.append(ft.Container(height=80))
 
+        list_content.controls.append(ft.Container(height=80))
         view.update()
 
     async def load_data(*args):
         await perform_load_data()
-        
+
     page.run_task(load_data)
     return view

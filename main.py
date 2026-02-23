@@ -41,7 +41,7 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
 
-    host = os.environ.get("HOST", "0.0.0.0")
+    host = os.environ.get("HOST", "192.168.0.25")
     port = int(os.environ.get("PORT", "8000"))
     secret_key = os.environ.get("FLET_SECRET_KEY", "chave_secreta_padrao_mudar_em_producao")
 
