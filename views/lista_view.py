@@ -376,6 +376,7 @@ def get_lista_view(page: ft.Page):
         bgcolor=BG_COLOR,
         padding=0,
         floating_action_button=fab,
+        floating_action_button_location=ft.FloatingActionButtonLocation.END_CONTAINED,
     )
     view.controls.append(file_picker)
     view.controls.append(file_picker_qr)
