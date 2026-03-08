@@ -1,20 +1,19 @@
 import flet as ft
 from app_colors import BG_COLOR, CARD_COLOR, CYAN, TEXT_PRIMARY, TEXT_SECONDARY
-from database import supabase
-import asyncio
+from database import insert_item
 
-def get_add_item_view(page: ft.Page):
+def get_add_item_view(page: ft.Page, lista_id: int):
     # Header
     back_btn = ft.IconButton(
-        icon=ft.Icons.ARROW_BACK_IOS_NEW, 
+        icon=ft.Icons.ARROW_BACK_IOS_NEW,
         icon_color=TEXT_PRIMARY,
-        on_click=lambda _: page.go("/lista")
+        on_click=lambda _: page.go(f"/lista/{lista_id}")
     )
-    
+
     header_col = ft.Row([
         back_btn,
         ft.Text("Novo Item", size=20, weight=ft.FontWeight.BOLD, color=TEXT_PRIMARY),
-        ft.Container(width=40) # Spacer to center the title
+        ft.Container(width=40)  # Spacer to center the title
     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
     # Inputs
@@ -27,7 +26,8 @@ def get_add_item_view(page: ft.Page):
         focused_color=TEXT_PRIMARY,
         bgcolor=CARD_COLOR,
         border_radius=12,
-        height=60
+        height=60,
+        autofocus=True,
     )
 
     txt_categoria = ft.Dropdown(
@@ -61,7 +61,7 @@ def get_add_item_view(page: ft.Page):
         keyboard_type=ft.KeyboardType.NUMBER,
         height=60
     )
-    
+
     btn_salvar = ft.ElevatedButton(
         content=ft.Text("Adicionar à Lista", size=16, weight=ft.FontWeight.BOLD),
         bgcolor=CYAN,
@@ -93,24 +93,23 @@ def get_add_item_view(page: ft.Page):
     )
 
     view = ft.View(
-        "/add_item",
-        [
-            main_container
-        ],
+        f"/add_item/{lista_id}",
+        [main_container],
         bgcolor=BG_COLOR,
         padding=0
     )
 
     async def salvar_item(e):
-        if not txt_nome.value:
+        nome = txt_nome.value.strip() if txt_nome.value else ""
+        if not nome:
             sb = ft.SnackBar(ft.Text("Preencha o nome do produto!", color=ft.Colors.WHITE), bgcolor=ft.Colors.RED, open=True)
             page.overlay.append(sb)
             page.update()
             return
-            
+
         try:
             preco_val = float(txt_preco.value.replace(",", ".")) if txt_preco.value else 0.0
-        except:
+        except Exception:
             sb = ft.SnackBar(ft.Text("Preço inválido!", color=ft.Colors.WHITE), bgcolor=ft.Colors.RED, open=True)
             page.overlay.append(sb)
             page.update()
@@ -120,30 +119,25 @@ def get_add_item_view(page: ft.Page):
         view.update()
 
         novo_item = {
-            "nome": txt_nome.value,
+            "nome": nome,
             "categoria": txt_categoria.value if txt_categoria.value else None,
             "preco": preco_val,
-            "comprado": False
+            "comprado": False,
+            "lista_id": lista_id,
         }
 
-        if supabase:
-            try:
-                await asyncio.to_thread(
-                    lambda: supabase.table("itens_lista").insert(novo_item).execute()
-                )
-                sb = ft.SnackBar(ft.Text("Item adicionado com sucesso!", color=BG_COLOR), bgcolor=CYAN, open=True)
-                page.overlay.append(sb)
-                page.go("/lista")
-            except Exception as ex:
-                print(f"Erro ao salvar: {ex}")
-                sb = ft.SnackBar(ft.Text("Erro ao salvar no banco", color=ft.Colors.WHITE), bgcolor=ft.Colors.RED, open=True)
-                page.overlay.append(sb)
-                btn_salvar.disabled = False
-                view.update()
-        else:
-            sb = ft.SnackBar(ft.Text("Supabase offline, test mock finalizado", color=BG_COLOR), bgcolor=CYAN, open=True)
+        sucesso = await insert_item(novo_item)
+
+        if sucesso:
+            sb = ft.SnackBar(ft.Text("Item adicionado com sucesso!", color=BG_COLOR), bgcolor=CYAN, open=True)
             page.overlay.append(sb)
-            page.go("/lista")
+            page.update()
+            page.go(f"/lista/{lista_id}")
+        else:
+            sb = ft.SnackBar(ft.Text("Erro ao salvar no banco", color=ft.Colors.WHITE), bgcolor=ft.Colors.RED, open=True)
+            page.overlay.append(sb)
+            btn_salvar.disabled = False
+            view.update()
 
     btn_salvar.on_click = lambda e: page.run_task(salvar_item, e)
 

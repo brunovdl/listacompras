@@ -1,5 +1,6 @@
 import flet as ft
 from app_colors import BG_COLOR
+from views.listas_view import get_listas_view
 from views.lista_view import get_lista_view
 from views.historico_view import get_historico_view
 from views.orcamento_view import get_orcamento_view
@@ -11,7 +12,6 @@ def main(page: ft.Page):
     page.bgcolor = BG_COLOR
     page.favicon = "favicon.png"
     
-    # Customizing fonts, we assume default unless specified
     page.fonts = {
         "Inter": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
     }
@@ -19,22 +19,44 @@ def main(page: ft.Page):
 
     def route_change(route):
         page.views.clear()
-        
-        if page.route == "/lista":
-            page.views.append(get_lista_view(page))
-        elif page.route == "/historico":
+        r = page.route
+
+        if r == "/" or r == "/listas":
+            page.views.append(get_listas_view(page))
+
+        elif r.startswith("/lista/"):
+            try:
+                lista_id = int(r.split("/lista/")[1])
+            except (IndexError, ValueError):
+                lista_id = None
+            if lista_id:
+                page.views.append(get_lista_view(page, lista_id))
+            else:
+                page.views.append(get_listas_view(page))
+
+        elif r.startswith("/add_item/"):
+            try:
+                lista_id = int(r.split("/add_item/")[1])
+            except (IndexError, ValueError):
+                lista_id = None
+            if lista_id:
+                page.views.append(get_add_item_view(page, lista_id))
+            else:
+                page.views.append(get_listas_view(page))
+
+        elif r == "/historico":
             page.views.append(get_historico_view(page))
-        elif page.route == "/orcamento":
+
+        elif r == "/orcamento":
             page.views.append(get_orcamento_view(page))
-        elif page.route == "/add_item":
-            page.views.append(get_add_item_view(page))
+
         else:
-            page.views.append(get_lista_view(page))
-            
+            page.views.append(get_listas_view(page))
+
         page.update()
 
     page.on_route_change = route_change
-    page.go("/lista")
+    page.go("/listas")
 
 if __name__ == "__main__":
     import os

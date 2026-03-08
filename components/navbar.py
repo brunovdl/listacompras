@@ -4,7 +4,7 @@ from app_colors import BG_COLOR, CYAN, TEXT_SECONDARY
 def create_navbar(page: ft.Page, selected_index: int):
     def change_tab(index: int):
         if index == 0:
-            page.go("/lista")
+            page.go("/listas")
         elif index == 1:
             page.go("/historico")
         elif index == 2:

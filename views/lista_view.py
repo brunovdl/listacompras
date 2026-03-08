@@ -1,10 +1,10 @@
 import flet as ft
 import asyncio
 from app_colors import BG_COLOR, CARD_COLOR, CARD_ELEVATED, CYAN, TEXT_PRIMARY, TEXT_SECONDARY
-from database import get_itens_lista, toggle_item_comprado, delete_item, update_item, supabase
+from database import get_itens_lista, toggle_item_comprado, delete_item, update_item, supabase, get_lista_by_id
 from components.navbar import create_navbar
 
-def get_lista_view(page: ft.Page):
+def get_lista_view(page: ft.Page, lista_id: int):
     # Header area
     settings_icon = ft.IconButton(icon=ft.Icons.SETTINGS, icon_color=TEXT_SECONDARY, icon_size=28)
     
@@ -39,9 +39,18 @@ def get_lista_view(page: ft.Page):
     )
     settings_icon = ft.IconButton(icon=ft.Icons.SETTINGS, icon_color=TEXT_SECONDARY, icon_size=28)
 
+    titulo_lista = ft.Text("Lista de Compras", size=20, weight=ft.FontWeight.BOLD, color=TEXT_PRIMARY)
+    back_btn = ft.IconButton(
+        icon=ft.Icons.ARROW_BACK_IOS_NEW,
+        icon_color=TEXT_SECONDARY,
+        icon_size=20,
+        on_click=lambda e: page.go("/listas")
+    )
+
     header_col = ft.Column([
         ft.Row([
-            ft.Text("Lista de Compras", size=24, weight=ft.FontWeight.BOLD, color=TEXT_PRIMARY),
+            back_btn,
+            titulo_lista,
             ft.Row([btn_selecionar, settings_icon], spacing=0)
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         subtitle_text
@@ -85,7 +94,7 @@ def get_lista_view(page: ft.Page):
         
         try:
             from groq_service import analyze_receipt_or_list_with_groq
-            from database import insert_itens_mock
+            from database import insert_item
             
             mock_items = await asyncio.to_thread(analyze_receipt_or_list_with_groq, file_path)
             
@@ -94,8 +103,9 @@ def get_lista_view(page: ft.Page):
                 for idx, item in enumerate(mock_items):
                     item['comprado'] = False
                     item.setdefault('preco', 0.0)
+                    item['lista_id'] = lista_id
                     # Inserir um item de cada vez
-                    await insert_itens_mock([item])
+                    await insert_item(item)
                     scan_status_text.value = f"Adicionando itens... {idx+1}/{total}"
                     scan_progress.value = (idx + 1) / total
                     # Atualizar lista sem reconstruir a view inteira
@@ -121,61 +131,12 @@ def get_lista_view(page: ft.Page):
         scan_banner.visible = False
         view.update()
 
-    async def qr_file_scan(file_path):
-        """Scanner via QR Code de NF-e"""
-        scan_status_text.value = "Lendo QR Code da nota fiscal..."
-        scan_progress.value = None  # indeterminate
-        scan_banner.visible = True
-        scan_progress.visible = True
-        view.update()
-
-        try:
-            from qrcode_service import get_items_from_nfe_qrcode
-            from database import insert_itens_mock
-
-            nfe_items = await asyncio.to_thread(get_items_from_nfe_qrcode, file_path)
-
-            if nfe_items and len(nfe_items) > 0:
-                total = len(nfe_items)
-                for idx, item in enumerate(nfe_items):
-                    item.setdefault('comprado', False)
-                    item.setdefault('preco', 0.0)
-                    await insert_itens_mock([item])
-                    scan_status_text.value = f"Importando itens da nota... {idx+1}/{total}"
-                    scan_progress.value = (idx + 1) / total
-                    await perform_load_data()
-
-                scan_status_text.value = f"✅ {total} itens importados da NF-e!"
-                scan_progress.visible = False
-                view.update()
-                await asyncio.sleep(2)
-            else:
-                scan_status_text.value = "Nenhum item extraído da nota."
-                scan_progress.visible = False
-                view.update()
-                await asyncio.sleep(2)
-
-        except Exception as ex:
-            print(f"Erro no QR Scanner: {ex}")
-            scan_status_text.value = f"⚠️ {str(ex)[:60]}"
-            scan_progress.visible = False
-            view.update()
-            await asyncio.sleep(4)
-
-        scan_banner.visible = False
-        view.update()
 
     def on_file_uploaded(e: ft.FilePickerUploadEvent):
         if e.progress == 1.0:
             import os
             file_path = os.path.join("uploads", e.file_name)
             page.run_task(groq_file_scan, file_path)
-
-    def on_file_uploaded_qr(e: ft.FilePickerUploadEvent):
-        if e.progress == 1.0:
-            import os
-            file_path = os.path.join("uploads", e.file_name)
-            page.run_task(qr_file_scan, file_path)
 
     def on_file_picked(e: ft.FilePickerResultEvent):
         if e.files and len(e.files) > 0:
@@ -200,31 +161,7 @@ def get_lista_view(page: ft.Page):
                         return
                 file_picker.upload(uf)
 
-    def on_file_picked_qr(e: ft.FilePickerResultEvent):
-        if e.files and len(e.files) > 0:
-            file_path = e.files[0].path
-            if file_path:
-                page.run_task(qr_file_scan, file_path)
-            else:
-                uf = []
-                for f in e.files:
-                    try:
-                        uf.append(
-                            ft.FilePickerUploadFile(
-                                f.name,
-                                upload_url=page.get_upload_url(f.name, 60)
-                            )
-                        )
-                    except Exception as ex:
-                        print("Erro get_upload_url (QR):", ex)
-                        sb = ft.SnackBar(ft.Text(f"Erro no upload: {ex}", color=ft.Colors.WHITE), bgcolor=ft.Colors.RED, open=True)
-                        page.overlay.append(sb)
-                        page.update()
-                        return
-                file_picker_qr.upload(uf)
-
     file_picker = ft.FilePicker(on_result=on_file_picked, on_upload=on_file_uploaded)
-    file_picker_qr = ft.FilePicker(on_result=on_file_picked_qr, on_upload=on_file_uploaded_qr)
 
     btn_escanear_lista = ft.Container(
         content=ft.Column([
@@ -239,33 +176,7 @@ def get_lista_view(page: ft.Page):
         ink=True
     )
     
-    btn_escanear_recibo = ft.Container(
-        content=ft.Column([
-            ft.Icon(ft.Icons.RECEIPT_LONG_OUTLINED, color=CYAN, size=40),
-            ft.Text("Escanear Recibo", size=14, color=TEXT_PRIMARY, weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER)
-        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
-        bgcolor=CARD_COLOR,
-        border_radius=12,
-        height=100,
-        expand=True,
-        on_click=lambda _: file_picker.pick_files(allow_multiple=False),
-        ink=True
-    )
-
-    btn_qrcode = ft.Container(
-        content=ft.Column([
-            ft.Icon(ft.Icons.QR_CODE_SCANNER, color=CYAN, size=40),
-            ft.Text("QR Code NF-e", size=14, color=TEXT_PRIMARY, weight=ft.FontWeight.W_500, text_align=ft.TextAlign.CENTER)
-        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
-        bgcolor=CARD_COLOR,
-        border_radius=12,
-        height=100,
-        expand=True,
-        on_click=lambda _: file_picker_qr.pick_files(allow_multiple=False),
-        ink=True
-    )
-
-    ia_row = ft.Row([btn_escanear_lista, btn_escanear_recibo, btn_qrcode], spacing=10)
+    ia_row = ft.Row([btn_escanear_lista], spacing=10)
 
     ia_section = ft.Column([
         ia_title,
@@ -362,12 +273,12 @@ def get_lista_view(page: ft.Page):
     fab = ft.FloatingActionButton(
         icon=ft.Icons.ADD,
         bgcolor=CYAN,
-        on_click=lambda _: page.go("/add_item"),
+        on_click=lambda _: page.go(f"/add_item/{lista_id}"),
         shape=ft.CircleBorder()
     )
 
     view = ft.View(
-        "/lista",
+        f"/lista/{lista_id}",
         [
             main_container,
             selecao_bar,
@@ -379,7 +290,6 @@ def get_lista_view(page: ft.Page):
         floating_action_button_location=ft.FloatingActionButtonLocation.END_FLOAT,
     )
     view.controls.append(file_picker)
-    view.controls.append(file_picker_qr)
 
     async def on_checkbox_change(e, item_id, current_status):
         new_status = not current_status
@@ -588,7 +498,7 @@ def get_lista_view(page: ft.Page):
     filtro_categoria = [None]
 
     async def perform_load_data():
-        itens = await get_itens_lista()
+        itens = await get_itens_lista(lista_id)
         list_content.controls.clear()
 
         todos_os_ids.clear()
@@ -700,6 +610,10 @@ def get_lista_view(page: ft.Page):
         view.update()
 
     async def load_data(*args):
+        # Carrega o nome da lista no título
+        lista_info = await get_lista_by_id(lista_id)
+        if lista_info:
+            titulo_lista.value = lista_info.get("nome", "Lista de Compras")
         await perform_load_data()
 
     page.run_task(load_data)
